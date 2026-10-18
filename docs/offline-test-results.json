@@ -1,0 +1,27 @@
+{
+  "Presets": [
+    {
+      "Peak": 0.05299743264913559,
+      "Rms": 0.03488033379439265,
+      "Preset": 0,
+      "PitchHz": 439.99847
+    },
+    {
+      "Peak": 0.059196002781391144,
+      "Rms": 0.03863257419825008,
+      "Preset": 1,
+      "PitchHz": 439.99847
+    },
+    {
+      "Peak": 0.05184848979115486,
+      "Rms": 0.034252701628605824,
+      "Preset": 2,
+      "PitchHz": 439.99847
+    }
+  ],
+  "MicrophoneRecorded": false,
+  "OptionalPitchPlugin": "not requested",
+  "AudioDevicesOpened": false,
+  "Passed": true,
+  "SoundPlayed": false
+}

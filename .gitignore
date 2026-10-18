@@ -1,0 +1,22 @@
+# Local routing and diagnostics
+*.local.json
+app/controls.json
+recordings/
+plugins/
+validation/
+*.log
+*.lnk
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+*.aiff
+*.exe
+*.dll
+*.vst3
+*.zip
+*.fxp
+*.tracktionedit
+*.tmp
+.DS_Store
