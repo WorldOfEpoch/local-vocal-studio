@@ -1,0 +1,9 @@
+{
+  "Passed": true,
+  "Assertions": 141,
+  "ActualUiCallbacksTested": true,
+  "FakeEnginesOnly": true,
+  "AudioDevicesOpened": false,
+  "RunningUserSessionTouched": false,
+  "SoundPlayed": false
+}

@@ -4,11 +4,13 @@ A local Windows vocal-practice panel with private headphone monitoring, tone pre
 
 ![Actual Local Vocal Studio interface](docs/studio.png)
 
+The screenshot predates the routing guard badge. Current builds show **NOT APPLIED / APPLYING / APPLIED / APPLY FAILED** above the routing buttons and label the button **APPLY ROUTING**.
+
 ## Start
 
 1. Install **PowerShell 7 x64** using [Microsoft's instructions](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows). Windows 10/11 and compatible audio endpoints are required.
 2. Download this repository and run **Start-Studio.cmd**. Or run `pwsh -NoProfile -STA -File .\app\Listen.ps1` from its folder.
-3. At the top, choose **Microphone** and **Headphones**. Leave **Main Output** disabled for private practice. Click **Use these devices**.
+3. At the top, choose **Microphone** and **Headphones**. Leave **Main Output** disabled for private practice. Click **APPLY ROUTING** and wait for **APPLIED**.
 4. Confirm headphones are connected to that output. Click **Hear Myself**. Listening starts OFF and at **-24 dB** on every launch; raise the headphone level gradually.
 5. Choose **Natural / Clear**, **Warm / Deep Tone**, or **Bright**. **Dry comparison** bypasses effects in headphones while preserving the processed recording.
 6. **Load song** opens a local file, including a song you downloaded from Suno. Use Play/Pause, Loop, seek, and Song level.
@@ -31,7 +33,11 @@ For two outputs, choose different **Main Output** and **Headphones**, then Apply
 
 **Mirror other apps from Main to Headphones** uses Windows loopback on the selected Main endpoint. Select it and apply devices. Other apps must already play to Main, or be assigned there in Windows' volume mixer. It does **not** automatically duplicate every app or every Windows output. When mirroring, the loaded song reaches headphones through Main rather than being mixed twice; enable Main Music for that song. Mirroring never feeds the Main output or an outgoing microphone bus.
 
-Main and Headphones cannot be the same endpoint. Device/mirror changes mute the panel until applied and headphones are confirmed again. Independent output clocks are not sample synchronized. Audible dual-output/system mirroring remains unverified on the test machine.
+Main and Headphones cannot be the same endpoint. Changing any microphone, Main, headphone or mirror choice immediately mutes both outputs, clears headphone confirmation and marks the route **NOT APPLIED**. Hear Myself, Main Music and headphone confirmation are disabled until the displayed choices have actually initialized successfully. The click handlers independently check the applied route, so re-checking headphones or forcing a click cannot resume an older route. Failed or timed-out Apply stays locked; it does not authorize the previous route. Reapplying also leaves both outputs OFF and requires fresh headphone confirmation.
+
+Apply recreates the panel's streams, so reload the song afterward. During an active recording, Stop Recording remains available and Apply is disabled; a selection change mutes monitoring but does not discard that recording. Saved choices may initialize on startup, but output enabling stays locked until initialization succeeds. After updating the source, close/reopen the panel when you are ready to activate the repair; an already running session is not hot-patched or restarted.
+
+Independent output clocks are not sample synchronized. Audible dual-output/system mirroring remains unverified on the test machine.
 
 ## Voice controls
 
@@ -75,6 +81,8 @@ Passed: offline tone presets/finite audio, A440 estimate (439.998 Hz), installed
 Actual headphone audibility, physical latency, long recording sessions, audible dual-output/system mirroring and real calls remain **untested**. The physical headphone connection was not confirmed during setup. View [test scope](docs/TESTING.md) before relying on the routing in a live session.
 
 Run the device-free synthetic checks with `pwsh -NoProfile -File .\tests\Test-Core.ps1`. Nothing is played or recorded from a microphone by that test.
+
+Run `pwsh -NoProfile -File .\tests\Test-RouteGuard.ps1` for the routing regression checks. They execute the production controller, UI functions and output/Apply callbacks using fake controls and fake engines. They cover selector changes, forced re-enable attempts, initialization/validation/stream-close failures, timeouts, repeated Apply, stale completions and startup. No audio devices or running user session are touched; physical listening remains untested.
 
 ## Calls and restore
 

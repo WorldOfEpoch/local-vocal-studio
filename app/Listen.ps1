@@ -1,5 +1,6 @@
 param([string]$StudioRoot=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'RouteGuard.ps1')
 $createdNew=$false;$instanceMutex=[Threading.Mutex]::new($true,'Local\LocalVocalStudioPanel',[ref]$createdNew)
 if(-not $createdNew){
  Add-Type @'
@@ -17,6 +18,7 @@ using System;using System.Runtime.InteropServices;public static class VocalWindo
 '@
 [Windows.Forms.Application]::EnableVisualStyles()
 $script:engine=$null;$script:tempSong=$null;$script:loadProcess=$null;$script:loadingName='';$script:message='Select your microphone and headphone output.'
+$script:routeGuard=New-RouteGuard;$script:applyTicket=$null;$script:applyWatch=$null
 $configPath=Join-Path $PSScriptRoot 'devices.local.json';$controlsPath=Join-Path $PSScriptRoot 'controls.json';$script:pitchPath=Join-Path $StudioRoot 'plugins\GVST\GSnap.dll'
 $config=if(Test-Path -LiteralPath $configPath){Get-Content -Raw -LiteralPath $configPath|ConvertFrom-Json}else{$null}
 if($config -and $config.PitchPlugin){$script:pitchPath=$config.PitchPlugin}
@@ -39,7 +41,8 @@ $mainChoice.AccessibleName='Main output selection';$none=[AlexListen.DeviceInfo]
 for($i=0;$i -lt $inputs.Count;$i++){if(($config -and $inputs[$i].Id -eq $config.InputId) -or (-not $config -and $inputs[$i].Name -match 'Yeti')){$micChoice.SelectedIndex=$i}}
 for($i=0;$i -lt $outputs.Count;$i++){if($config -and $outputs[$i].Id -eq $config.OutputId){$output.SelectedIndex=$i}}
 for($i=0;$i -lt $mainChoice.Items.Count;$i++){if($config -and $config.MainId -and $mainChoice.Items[$i].Id -eq $config.MainId){$mainChoice.SelectedIndex=$i}}
-$apply=Button 'Use these devices' 22 163 180
+$routeBadge=Label 'NOT APPLIED | Click APPLY ROUTING before enabling outputs' 22 146 716 16;$routeBadge.Font=[Drawing.Font]::new('Segoe UI',8);$routeBadge.ForeColor=$title.ForeColor
+$apply=Button 'APPLY ROUTING' 22 163 180
 $headphones=Check 'Headphones connected to this output' 220 165 330
 $mainMusic=Button 'MAIN MUSIC: OFF' 558 163 180 31
 $mirror=Check 'Mirror other apps from Main to Headphones (apply devices after changing)' 22 197 716;$tip.SetToolTip($mirror,'Captures only the selected Main endpoint, including call return audio playing there. It goes to headphones only. Put other apps on Main in Windows. Main and Headphones must differ. No default devices change.')
@@ -70,13 +73,70 @@ function SafeValue($s,$v){$s.Value=[Math]::Max($s.Minimum,[Math]::Min($s.Maximum
 SafeValue $gain.Slider $settings.MicGain;SafeValue $comp.Slider $settings.Compression;SafeValue $room.Slider $settings.Reverb;SafeValue $echo.Slider $settings.Delay;SafeValue $songLevel.Slider $settings.SongLevel
 function ApplyControls {if($script:engine){$script:engine.Preset=$settings.Preset;$script:engine.MicGainDb=$gain.Slider.Value;$script:engine.VolumeDb=$volume.Slider.Value;$script:engine.MainVolumeDb=$mainLevel.Slider.Value;$script:engine.Compression=$comp.Slider.Value;$script:engine.Reverb=$room.Slider.Value;$script:engine.Delay=$echo.Slider.Value;$script:engine.SongDb=$songLevel.Slider.Value;$script:engine.Dry=$dry.Checked;$script:engine.UsePitch=$pitch.Checked;$script:engine.LoopSong=$loop.Checked;$mask=4095;if($settings.PitchScale -gt 0){$mask=0;$intervals=if($settings.PitchScale -eq 1){@(0,2,4,5,7,9,11)}else{@(0,2,3,5,7,8,10)};foreach($n in $intervals){$mask=$mask -bor (1 -shl (($n+$settings.PitchRoot)%12))}};$script:engine.PitchMask=$mask;$script:engine.PitchAmount=$settings.PitchAmount;$script:engine.PitchAttack=$settings.PitchAttack;$script:engine.PitchRelease=$settings.PitchRelease}}
 function SaveControls {$settings.MicGain=$gain.Slider.Value;$settings.Compression=$comp.Slider.Value;$settings.Reverb=$room.Slider.Value;$settings.Delay=$echo.Slider.Value;$settings.SongLevel=$songLevel.Slider.Value;$settings|ConvertTo-Json|Set-Content -LiteralPath $controlsPath}
-function StartAudio {if($micChoice.SelectedIndex -lt 0 -or $output.SelectedIndex -lt 0){$script:message='Select a microphone and a headphone endpoint first.';return};if($script:engine){$script:engine.Dispose();$script:engine=$null};$headphones.Checked=$false;$hear.Text='HEAR MYSELF - OFF';$mainMusic.Text='MAIN MUSIC: OFF';$script:engine=[AlexListen.Engine]::new($StudioRoot,$micChoice.SelectedItem.Id,$output.SelectedItem.Id,$script:pitchPath,$mainChoice.SelectedItem.Id,$mirror.Checked);ApplyControls;$script:message='Monitoring OFF. Confirm your headphones, then click Hear Myself.';@{InputId=$micChoice.SelectedItem.Id;OutputId=$output.SelectedItem.Id;MainId=$mainChoice.SelectedItem.Id;PitchPlugin=$script:pitchPath}|ConvertTo-Json|Set-Content -LiteralPath $configPath}
-$apply.Add_Click({try{StartAudio}catch{$script:message=$_.Exception.Message}})
-foreach($choice in @($micChoice,$mainChoice,$output)){$choice.DropDownWidth=550;$tip.SetToolTip($choice,[string]$choice.SelectedItem);$choice.Add_SelectedIndexChanged({$headphones.Checked=$false;if($script:engine){$script:engine.Hear=$false;$script:engine.MainMusic=$false};$tip.SetToolTip($this,[string]$this.SelectedItem);$script:message='Device choices changed. Click Use these devices to apply; monitoring is OFF.'})}
-$mirror.Add_CheckedChanged({$headphones.Checked=$false;if($script:engine){$script:engine.Hear=$false;$script:engine.MainMusic=$false};$script:message='Mirror choice changed. Apply devices. Other apps must play to Main in Windows.'})
-$headphones.Add_CheckedChanged({if(-not $headphones.Checked -and $script:engine){$script:engine.Hear=$false}})
-$mainMusic.Add_Click({if(-not $script:engine -or -not $script:engine.Running -or -not $mainChoice.SelectedItem.Id){$script:message='Select a different Main Output and Apply devices first.';return};$script:engine.MainMusic=-not $script:engine.MainMusic;$script:message='Main carries this app song only. Microphone stays in headphones.'})
-$hear.Add_Click({if(-not $script:engine -or -not $script:engine.Running){$script:message='Use these devices first; check the status for any audio error.';return};if(-not $headphones.Checked){$script:message='Confirm headphones are connected to the selected output first.';return};$script:engine.Hear=-not $script:engine.Hear;$script:message=if($script:engine.Hear){'Monitoring ON. Raise listening level gradually if needed.'}else{'Monitoring OFF. Recording continues if active.'}})
+function Get-DisplayedRoute {New-RouteSelection $micChoice.SelectedItem.Id $output.SelectedItem.Id $mainChoice.SelectedItem.Id $mirror.Checked}
+function Sync-DisplayedRoute {
+ $displayed=Get-DisplayedRoute
+ if(-not(Test-SameRoute $displayed $script:routeGuard.Desired)){
+  Set-DisplayedRoute $script:routeGuard $displayed $script:engine
+  $headphones.Checked=$false
+ }
+}
+function Update-RouteUi {
+ $ready=Test-RouteReady $script:routeGuard $script:engine
+ if(-not $ready){Stop-RouteOutputs $script:engine;if($headphones.Checked){$headphones.Checked=$false}}
+ $headphones.Enabled=$ready;$hear.Enabled=$ready
+ $mainMusic.Enabled=$ready -and [bool]$script:routeGuard.Applied.MainId
+ $record.Enabled=$ready -or ($script:engine -and $script:engine.IsRecording)
+ $apply.Enabled=$script:routeGuard.Phase -ne 'Applying' -and -not($script:engine -and $script:engine.IsRecording)
+ switch($script:routeGuard.Phase){
+  'Applied' {$apply.Text='REAPPLY ROUTING';$routeBadge.Text='APPLIED | Confirm headphones before enabling Hear Myself';$routeBadge.ForeColor=[Drawing.Color]::Silver}
+  'Applying' {$apply.Text='APPLYING...';$routeBadge.Text='APPLYING ROUTING | Both outputs locked OFF';$routeBadge.ForeColor=$title.ForeColor}
+  'Failed' {$apply.Text='APPLY ROUTING';$routeBadge.Text='APPLY FAILED | '+$script:routeGuard.Error;$routeBadge.ForeColor=$title.ForeColor}
+  default {$apply.Text='APPLY ROUTING';$routeBadge.Text='NOT APPLIED | Click APPLY ROUTING before enabling outputs';$routeBadge.ForeColor=$title.ForeColor}
+ }
+ $apply.ForeColor=if($ready){$form.ForeColor}else{$title.ForeColor}
+}
+function New-SelectedRouteEngine($Selection) {
+ [AlexListen.Engine]::new($StudioRoot,$Selection.MicId,$Selection.HeadphoneId,$script:pitchPath,$Selection.MainId,$Selection.Mirror)
+}
+function Show-PanelWindow {[void][VocalWindow]::ShowWindow($form.Handle,5)}
+function StartAudio {
+ Sync-DisplayedRoute
+ if($script:engine -and $script:engine.IsRecording){$script:message='Stop recording before applying routing.';Update-RouteUi;return}
+ $headphones.Checked=$false
+ $script:applyTicket=Start-RouteApplication $script:routeGuard $script:engine
+ if($null -eq $script:applyTicket){$script:message=$script:routeGuard.Error;Update-RouteUi;return}
+ try{
+  if($script:engine){$script:engine.Dispose();$script:engine=$null}
+  $selection=$script:applyTicket.Selection
+  $script:engine=New-SelectedRouteEngine $selection
+  $script:applyWatch=[Diagnostics.Stopwatch]::StartNew()
+  ApplyControls;$songName.Text='No song loaded';$script:message='Applying routing. Outputs remain OFF.'
+ }catch{Fail-RouteApplication $script:routeGuard $script:engine $_.Exception.Message;$script:message=$script:routeGuard.Error}
+ Update-RouteUi
+}
+function Poll-RouteApplication {
+ Sync-DisplayedRoute
+ if($script:routeGuard.Phase -eq 'Applying'){
+  if(Update-RouteApplication $script:routeGuard $script:applyTicket $script:engine){
+   $selection=$script:routeGuard.Applied
+   @{InputId=$selection.MicId;OutputId=$selection.HeadphoneId;MainId=$selection.MainId;PitchPlugin=$script:pitchPath}|ConvertTo-Json|Set-Content -LiteralPath $configPath
+   $script:message='Routing APPLIED. Confirm headphones, then click Hear Myself. Both outputs are OFF.'
+  }elseif($script:routeGuard.Phase -eq 'Applying' -and $script:applyWatch -and $script:applyWatch.Elapsed.TotalSeconds -gt 5){
+   Fail-RouteApplication $script:routeGuard $script:engine 'Audio initialization timed out. Reapply routing to retry.'
+  }
+ }elseif($script:routeGuard.Phase -eq 'Applied' -and -not(Test-RouteReady $script:routeGuard $script:engine)){
+  $reason=if($script:engine.Error){$script:engine.Error}else{'Audio engine stopped. Reapply routing.'}
+  Fail-RouteApplication $script:routeGuard $script:engine $reason
+ }
+ Update-RouteUi
+}
+$apply.Add_Click({StartAudio})
+foreach($choice in @($micChoice,$mainChoice,$output)){$choice.DropDownWidth=550;$tip.SetToolTip($choice,[string]$choice.SelectedItem);$choice.Add_SelectedIndexChanged({Sync-DisplayedRoute;$headphones.Checked=$false;$tip.SetToolTip($this,[string]$this.SelectedItem);$script:message='Routing changed. Click APPLY ROUTING; outputs are locked OFF.';Update-RouteUi})}
+$mirror.Add_CheckedChanged({Sync-DisplayedRoute;$headphones.Checked=$false;$script:message='Mirror choice changed. Click APPLY ROUTING; outputs are locked OFF.';Update-RouteUi})
+$headphones.Add_CheckedChanged({if(-not $headphones.Checked -and $script:engine){$script:engine.Hear=$false};Update-RouteUi})
+$mainMusic.Add_Click({Sync-DisplayedRoute;if(-not(Request-RouteMainMusic $script:routeGuard $script:engine)){$script:message='Apply the displayed routing successfully and select a Main Output first.'}else{$script:message='Main carries this app song only. Microphone stays in headphones.'};Update-RouteUi})
+$hear.Add_Click({Sync-DisplayedRoute;if(-not(Request-RouteHear $script:routeGuard $script:engine $headphones.Checked)){$script:message='Apply the displayed routing successfully, then confirm headphones first.'}else{$script:message=if($script:engine.Hear){'Monitoring ON. Raise listening level gradually if needed.'}else{'Monitoring OFF. Recording continues if active.'}};Update-RouteUi})
 $natural.Add_Click({$settings.Preset=0;ApplyControls});$warm.Add_Click({$settings.Preset=1;ApplyControls});$bright.Add_Click({$settings.Preset=2;ApplyControls})
 foreach($s in @($gain.Slider,$volume.Slider,$mainLevel.Slider,$comp.Slider,$room.Slider,$echo.Slider,$songLevel.Slider)){$s.Add_ValueChanged({ApplyControls})}
 $dry.Add_CheckedChanged({ApplyControls});$pitch.Add_CheckedChanged({ApplyControls});$loop.Add_CheckedChanged({ApplyControls})
@@ -98,24 +158,26 @@ $pitchControls.Add_Click({
 $load.Add_Click({if(-not $script:engine -or -not $script:engine.Running){$script:message='Connect the audio devices first.';return};$dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='Audio files|*.wav;*.mp3;*.flac;*.m4a;*.ogg;*.aiff|All files|*.*';$dialog.Title='Load your downloaded song';if($dialog.ShowDialog() -ne 'OK'){return};try{$path=$dialog.FileName;$script:engine.PlaySong=$false;try{$script:engine.LoadSong($path);$songName.Text=[IO.Path]::GetFileName($path);$script:message='Song loaded locally. Play/Pause and Hear Myself control listening.'}catch{$ff=Get-Command ffmpeg -ErrorAction SilentlyContinue;if(-not $ff){throw 'This file needs optional FFmpeg, or export it as 48 kHz stereo WAV. See README.'};$script:tempSong=Join-Path ([IO.Path]::GetTempPath()) ('local-vocal-song-'+[Guid]::NewGuid().ToString('N')+'.wav');$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ff.Source;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;foreach($arg in @('-hide_banner','-loglevel','error','-y','-i',$path,'-vn','-map_metadata','-1','-ar','48000','-ac','2','-c:a','pcm_f32le',$script:tempSong)){[void]$psi.ArgumentList.Add($arg)};$script:loadProcess=[Diagnostics.Process]::Start($psi);$script:loadingName=[IO.Path]::GetFileName($path);$load.Enabled=$false;$script:message='Converting your song locally...';}}catch{$script:message=$_.Exception.Message}})
 $play.Add_Click({if($script:engine -and $script:engine.SongDuration -gt 0){$script:engine.PlaySong=-not $script:engine.PlaySong;$script:message=if($script:engine.Hear){'Song playback toggled.'}else{'Song transport started/paused. Hear Myself is OFF, so headphones stay muted.'}}})
 $rewind.Add_Click({if($script:engine){$script:engine.RewindSong()}});$seek.Add_MouseUp({if($script:engine -and $script:engine.SongDuration -gt 0){$script:engine.SeekSong($seek.Value*$script:engine.SongDuration/1000)}})
-$record.Add_Click({try{if(-not $script:engine -or -not $script:engine.Running){throw 'Connect audio devices first.'};if($script:engine.IsRecording){$script:engine.StopRecording();$script:message='Saved two vocal takes: DRY and FX. Song is excluded.'}else{$script:engine.StartRecording();$script:message='Recording DRY + FX vocal files locally. Click Stop recording to finish.'}}catch{$script:message=$_.Exception.Message}})
+$record.Add_Click({try{Sync-DisplayedRoute;if($script:engine -and $script:engine.IsRecording){$script:engine.StopRecording();$script:message='Saved two vocal takes: DRY and FX. Song is excluded.'}else{if(-not(Test-RouteReady $script:routeGuard $script:engine)){throw 'Apply the displayed routing successfully before starting a recording.'};$script:engine.StartRecording();$script:message='Recording DRY + FX vocal files locally. Click Stop recording to finish.'}}catch{$script:message=$_.Exception.Message};Update-RouteUi})
 $recordings.Add_Click({$dir=Join-Path $StudioRoot 'recordings';[void][IO.Directory]::CreateDirectory($dir);Start-Process explorer.exe -ArgumentList ('"'+$dir+'"')})
 $advanced.Add_Click({$shortcut=Join-Path $StudioRoot 'Open Alex Vocal Studio.lnk';if(Test-Path -LiteralPath $shortcut){Invoke-Item -LiteralPath $shortcut}else{$script:message='Open your separately installed Waveform Free for the advanced DAW workflow. See README.'}})
 $script:statusTicks=0;$timer=[Windows.Forms.Timer]::new();$timer.Interval=100
 $timer.Add_Tick({
+ Poll-RouteApplication
  if($script:loadProcess -and $script:loadProcess.HasExited){try{if($script:loadProcess.ExitCode -ne 0){throw 'Song conversion failed. Try another local file.'};$script:engine.LoadSong($script:tempSong);$songName.Text=$script:loadingName;$script:message='Song ready. Press Play/Pause; turn Hear Myself on to hear it.'}catch{$script:message=$_.Exception.Message};$script:loadProcess.Dispose();$script:loadProcess=$null;$load.Enabled=$true}
  foreach($p in @($gain,$volume,$mainLevel,$songLevel)){$p.Label.Text=$p.Slider.Tag+': '+$p.Slider.Value+' dB'};foreach($p in @($comp,$room,$echo)){$p.Label.Text=$p.Slider.Tag+': '+$p.Slider.Value+'%'}
  foreach($pair in @(@($natural,0),@($warm,1),@($bright,2))){$pair[0].BackColor=if($settings.Preset -eq $pair[1]){[Drawing.Color]::FromArgb(40,95,87)}else{[Drawing.Color]::FromArgb(32,34,41)}}
  if($script:engine){$e=$script:engine;$db=20*[Math]::Log10([Math]::Max(1e-9,$e.MicPeak));$meter.Value=[Math]::Max(0,[Math]::Min(600,[int](($db+60)*10)));$micLabel.Text='MIC INPUT: '+[Math]::Round($db,1)+' dBFS'+$(if($db -gt -1){' - CLIPPING: lower the mic gain'}elseif($db -lt -65){' - very quiet / check physical mute'}else{''});$micLabel.ForeColor=if($db -gt -1){[Drawing.Color]::Salmon}else{[Drawing.Color]::WhiteSmoke}
-  $hear.Text=if($e.Hear){'HEAR MYSELF  -  ON'}else{'HEAR MYSELF  -  OFF'};$hear.BackColor=if($e.Hear){[Drawing.Color]::FromArgb(40,95,87)}else{[Drawing.Color]::FromArgb(32,34,41)};$record.Text=if($e.IsRecording){'STOP RECORDING'}else{'Record practice'};$apply.Enabled=-not $e.IsRecording
+  $hear.Text=if($e.Hear){'HEAR MYSELF  -  ON'}else{'HEAR MYSELF  -  OFF'};$hear.BackColor=if($e.Hear){[Drawing.Color]::FromArgb(40,95,87)}else{[Drawing.Color]::FromArgb(32,34,41)};$record.Text=if($e.IsRecording){'STOP RECORDING'}else{'Record practice'}
   $mainMusic.Text=if($e.MainMusic){'MAIN MUSIC: ON'}else{'MAIN MUSIC: OFF'}
   if($e.PitchHz -gt 0){$m=69+12*[Math]::Log($e.PitchHz/440,2);$n=[int][Math]::Round($m);$notes=@('C','C#','D','D#','E','F','F#','G','G#','A','A#','B');$note=$notes[(($n%12)+12)%12]+([Math]::Floor($n/12)-1);$tuner.Text='PITCH  '+$note+'  |  '+[Math]::Round($e.PitchHz,1)+' Hz  |  '+[Math]::Round(($m-$n)*100)+' cents (estimate)'}else{$tuner.Text='PITCH  -  sustain a clear vowel or a note'}
   $songTime.Text=([TimeSpan]::FromSeconds($e.SongPosition)).ToString('mm\:ss')+' / '+([TimeSpan]::FromSeconds($e.SongDuration)).ToString('mm\:ss');if(-not $seek.Capture -and $e.SongDuration -gt 0){$seek.Value=[int][Math]::Min(1000,$e.SongPosition/$e.SongDuration*1000)}
-  $route.Text=if($e.Running){'Engine ready | '+[Math]::Round($e.CapturePeriod/48,1)+' ms input / '+[Math]::Round($e.RenderPeriod/48,1)+' ms output periods | physical latency unmeasured'}else{'ENGINE STOPPED: '+$e.Error};$status.Text=if($e.Error){$e.Error}else{$script:message}
+  $route.Text=if(Test-RouteReady $script:routeGuard $e){'Routing applied | '+[Math]::Round($e.CapturePeriod/48,1)+' ms input / '+[Math]::Round($e.RenderPeriod/48,1)+' ms output periods | physical latency unmeasured'}else{'Routing '+$script:routeGuard.Phase+' | Outputs locked OFF until a successful Apply.'};$status.Text=if($script:routeGuard.Error){$script:routeGuard.Error}elseif($e.Error){$e.Error}else{$script:message}
   if(++$script:statusTicks%10 -eq 0){@{Running=$e.Running;Hear=$e.Hear;MainMusic=$e.MainMusic;MainPeak=$e.MainPeak;MirrorPeak=$e.MirrorPeak;Dry=$e.Dry;UsePitch=$e.UsePitch;Preset=$e.Preset;MicPeak=$e.MicPeak;OutputPeak=$e.OutputPeak;VolumeDb=$e.VolumeDb;MicGainDb=$e.MicGainDb;Compression=$e.Compression;Reverb=$e.Reverb;Delay=$e.Delay;IsRecording=$e.IsRecording;SongPosition=$e.SongPosition;SongDuration=$e.SongDuration;PlaySong=$e.PlaySong;LoopSong=$e.LoopSong;RenderBlocks=$e.RenderBlocks;StarvedBlocks=$e.StarvedBlocks;Error=$e.Error;Time=(Get-Date).ToUniversalTime().ToString('o')}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot 'status.local.json')}
  }else{$status.Text=$script:message}
 })
-$form.Add_Shown({[void][VocalWindow]::ShowWindow($form.Handle,5);try{if($micChoice.SelectedIndex -ge 0 -and $output.SelectedIndex -ge 0){StartAudio}}catch{$script:message=$_.Exception.Message};$timer.Start()})
+Update-RouteUi
+$form.Add_Shown({Show-PanelWindow;try{if($micChoice.SelectedIndex -ge 0 -and $output.SelectedIndex -ge 0){StartAudio}}catch{Fail-RouteApplication $script:routeGuard $script:engine $_.Exception.Message;$script:message=$script:routeGuard.Error};Update-RouteUi;$timer.Start()})
 $form.Add_FormClosed({$timer.Stop();SaveControls;if($script:loadProcess -and -not $script:loadProcess.HasExited){$script:loadProcess.Kill()};if($script:engine){$script:engine.Dispose()};@{Running=$false;Hear=$false;MainMusic=$false;IsRecording=$false;Time=(Get-Date).ToUniversalTime().ToString('o')}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot 'status.local.json');if($script:tempSong -and (Test-Path -LiteralPath $script:tempSong)){Remove-Item -LiteralPath $script:tempSong}})
 [void]$form.ShowDialog()
 $instanceMutex.ReleaseMutex();$instanceMutex.Dispose()
