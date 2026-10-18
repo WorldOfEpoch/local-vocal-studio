@@ -1,5 +1,12 @@
 param([string]$StudioRoot=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
+$createdNew=$false;$instanceMutex=[Threading.Mutex]::new($true,'Local\LocalVocalStudioPanel',[ref]$createdNew)
+if(-not $createdNew){
+ Add-Type @'
+using System;using System.Runtime.InteropServices;public static class ExistingStudio {[DllImport("user32.dll",CharSet=CharSet.Unicode)]static extern IntPtr FindWindow(IntPtr c,string t);[DllImport("user32.dll")]static extern bool ShowWindow(IntPtr h,int s);[DllImport("user32.dll")]static extern bool SetForegroundWindow(IntPtr h);public static void Show(){var h=FindWindow(IntPtr.Zero,"Local Vocal Studio");if(h!=IntPtr.Zero){ShowWindow(h,9);SetForegroundWindow(h);}}}
+'@
+ [ExistingStudio]::Show();$instanceMutex.Dispose();exit
+}
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type -Path (Join-Path $PSScriptRoot 'AudioCore.cs')
 $drawingRefs=@([Drawing.Bitmap].Assembly.Location,[Drawing.Color].Assembly.Location,[Drawing.RectangleF].Assembly.Location,[Drawing.Drawing2D.SmoothingMode].Assembly.Location)
@@ -111,3 +118,4 @@ $timer.Add_Tick({
 $form.Add_Shown({[void][VocalWindow]::ShowWindow($form.Handle,5);try{if($micChoice.SelectedIndex -ge 0 -and $output.SelectedIndex -ge 0){StartAudio}}catch{$script:message=$_.Exception.Message};$timer.Start()})
 $form.Add_FormClosed({$timer.Stop();SaveControls;if($script:loadProcess -and -not $script:loadProcess.HasExited){$script:loadProcess.Kill()};if($script:engine){$script:engine.Dispose()};@{Running=$false;Hear=$false;MainMusic=$false;IsRecording=$false;Time=(Get-Date).ToUniversalTime().ToString('o')}|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $PSScriptRoot 'status.local.json');if($script:tempSong -and (Test-Path -LiteralPath $script:tempSong)){Remove-Item -LiteralPath $script:tempSong}})
 [void]$form.ShowDialog()
+$instanceMutex.ReleaseMutex();$instanceMutex.Dispose()
